@@ -1,0 +1,21 @@
+{
+  "itemGroup.examplemod": "Example Mod Tab",
+  "block.examplemod.example_block": "Example Block",
+  "item.examplemod.example_item": "Example Item",
+  "item.examplemod.binding_ticket": "Binding Ticket",
+  "message.examplemod.bound": "Worker bound to you. Sneak-use the ticket to assign a waiting job.",
+  "message.examplemod.already_bound": "This mob is already bound.",
+  "message.examplemod.unavailable": "This mob is no longer available for binding.",
+  "message.examplemod.job_assigned": "Waiting job assigned. No automatic execution is available yet.",
+  "message.examplemod.job_cancelled": "Worker job cancelled.",
+  "message.examplemod.job_denied": "You cannot manage this worker.",
+  "message.examplemod.job_invalid": "This worker cannot receive that job.",
+
+  "examplemod.configuration.title": "Example Mod Configs",
+  "examplemod.configuration.section.examplemod.common.toml": "Example Mod Configs",
+  "examplemod.configuration.section.examplemod.common.toml.title": "Example Mod Configs",
+  "examplemod.configuration.items": "Item List",
+  "examplemod.configuration.logDirtBlock": "Log Dirt Block",
+  "examplemod.configuration.magicNumberIntroduction": "Magic Number Text",
+  "examplemod.configuration.magicNumber": "Magic Number"
+}
