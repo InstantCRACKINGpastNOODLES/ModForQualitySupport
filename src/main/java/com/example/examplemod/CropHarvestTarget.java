@@ -7,7 +7,10 @@ import net.minecraft.world.entity.Mob;
 import net.minecraft.world.level.block.CropBlock;
 import net.minecraft.world.level.block.state.BlockState;
 
-/** Read-only eligibility check; accepting a target does not harvest it or advance a job. */
+/**
+ * Validates whether a crop block in the world is eligible for autonomous harvesting.
+ * Integrates with CropRegistry to support vanilla and modded crop adapters.
+ */
 public final class CropHarvestTarget {
     public static final int MAX_DISTANCE = 8;
 
@@ -15,8 +18,13 @@ public final class CropHarvestTarget {
     }
 
     public static boolean eligible(BlockState state, boolean loaded, boolean permitted, double distanceSquared) {
-        return loaded && permitted && distanceSquared <= MAX_DISTANCE * MAX_DISTANCE &&
-                state != null && state.getBlock() instanceof CropBlock crop && crop.isMaxAge(state);
+        if (!loaded || !permitted || distanceSquared > MAX_DISTANCE * MAX_DISTANCE || state == null) {
+            return false;
+        }
+        if (state.getBlock() instanceof CropBlock crop) {
+            return crop.isMaxAge(state);
+        }
+        return CropRegistry.isMature(null, BlockPos.ZERO, state);
     }
 
     public static boolean eligible(ServerLevel level, Mob worker, ServerPlayer owner, BlockPos pos) {
@@ -31,8 +39,11 @@ public final class CropHarvestTarget {
                 !profile.dimension().equals(level.dimension().location())) {
             return false;
         }
-        // This is not a substitute for a target-specific protection/claim permission check.
-        return eligible(level.getBlockState(pos), true, owner.mayBuild(), worker.distanceToSqr(pos.getX() + 0.5,
-                pos.getY() + 0.5, pos.getZ() + 0.5));
+        BlockState state = level.getBlockState(pos);
+        double distSq = worker.distanceToSqr(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+        if (distSq > MAX_DISTANCE * MAX_DISTANCE || !owner.mayBuild()) {
+            return false;
+        }
+        return CropRegistry.isMature(level, pos, state);
     }
 }

@@ -18,6 +18,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.material.MapColor;
 import net.neoforged.api.distmarker.Dist;
+import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.Mod;
@@ -52,6 +53,9 @@ public class ExampleMod {
             () -> AttachmentType.builder(WorkerProfile::unbound).serialize(WorkerProfile.CODEC).build());
     public static final DeferredHolder<AttachmentType<?>, AttachmentType<WorkerStorage>> WORKER_STORAGE = ATTACHMENTS.register("worker_storage",
             () -> AttachmentType.builder(WorkerStorage::empty).serialize(WorkerStorage.CODEC).build());
+    public static final DeferredHolder<AttachmentType<?>, AttachmentType<EquipmentCapabilityPolicy.ShelterConstructionState>> SHELTER_STATE = ATTACHMENTS.register("shelter_state",
+            () -> AttachmentType.builder(EquipmentCapabilityPolicy.ShelterConstructionState::empty)
+                    .serialize(EquipmentCapabilityPolicy.ShelterConstructionState.CODEC).build());
     public static final DeferredItem<BindingTicketItem> BINDING_TICKET = ITEMS.register("binding_ticket",
             () -> new BindingTicketItem(new Item.Properties().stacksTo(1)));
     // Create a Deferred Register to hold CreativeModeTabs which will all be registered under the "examplemod" namespace
@@ -90,12 +94,18 @@ public class ExampleMod {
         WorkerManagementMenu.TYPES.register(modEventBus);
         // Register the Deferred Register to the mod event bus so tabs get registered
         CREATIVE_MODE_TABS.register(modEventBus);
+        modEventBus.addListener(this::registerPayloadHandlers);
 
         // Register ourselves for server and other game events we are interested in.
         // Note that this is necessary if and only if we want *this* class (ExampleMod) to respond directly to events.
         // Do not add this line if there are no @SubscribeEvent-annotated functions in this class, like onServerStarting() below.
         NeoForge.EVENT_BUS.register(this);
         NeoForge.EVENT_BUS.addListener(WorkerExecutionLoop::onEntityTick);
+        NeoForge.EVENT_BUS.addListener(EventPriority.HIGHEST, BindingTicketItem::onEntityInteractSpecific);
+        NeoForge.EVENT_BUS.addListener(EventPriority.HIGHEST, BindingTicketItem::onEntityInteract);
+        NeoForge.EVENT_BUS.addListener(EventPriority.HIGHEST, BindingTicketItem::onRightClickBlock);
+        NeoForge.EVENT_BUS.addListener(RescueServerManager::onPlayerLoggedIn);
+        TouhouLittleMaidCompat.init();
 
         // Register the item to a creative tab
         modEventBus.addListener(this::addCreative);
@@ -122,6 +132,91 @@ public class ExampleMod {
         if (event.getTabKey() == CreativeModeTabs.BUILDING_BLOCKS) {
             event.accept(EXAMPLE_BLOCK_ITEM);
         }
+    }
+
+    private void registerPayloadHandlers(net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent event) {
+        net.neoforged.neoforge.network.registration.PayloadRegistrar registrar = event.registrar("1.0.0");
+        registrar.playToClient(
+                OrderSessionSyncPayload.TYPE,
+                OrderSessionSyncPayload.STREAM_CODEC,
+                (payload, context) -> {
+                    context.enqueueWork(() -> {
+                        if (net.neoforged.fml.loading.FMLEnvironment.dist == Dist.CLIENT) {
+                            ExampleModClient.handleOrderSessionSync(payload);
+                        }
+                    });
+                }
+        );
+        registrar.playToClient(
+                RescueAlertPayload.TYPE,
+                RescueAlertPayload.STREAM_CODEC,
+                (payload, context) -> {
+                    context.enqueueWork(() -> {
+                        if (net.neoforged.fml.loading.FMLEnvironment.dist == Dist.CLIENT) {
+                            RescueWaypointManager.handleRescueAlert(payload);
+                        }
+                    });
+                }
+        );
+        registrar.playToServer(
+                RescueResolutionRequestPayload.TYPE,
+                RescueResolutionRequestPayload.STREAM_CODEC,
+                (payload, context) -> {
+                    context.enqueueWork(() -> {
+                        if (context.player() instanceof net.minecraft.server.level.ServerPlayer player) {
+                            net.minecraft.server.level.ServerLevel level = player.serverLevel();
+                            net.minecraft.world.entity.Entity entity = null;
+                            if (level != null) {
+                                entity = level.getEntity(payload.workerId());
+                                if (entity == null && level.getServer() != null) {
+                                    for (net.minecraft.server.level.ServerLevel otherLevel : level.getServer().getAllLevels()) {
+                                        entity = otherLevel.getEntity(payload.workerId());
+                                        if (entity != null) break;
+                                    }
+                                }
+                            }
+                            net.minecraft.world.entity.Mob workerMob = (entity instanceof net.minecraft.world.entity.Mob mob) ? mob : null;
+                            WorkerStorage storage = (workerMob != null && workerMob.hasData(ExampleMod.WORKER_STORAGE))
+                                    ? workerMob.getData(ExampleMod.WORKER_STORAGE) : null;
+
+                            RescueServerManager.handleResolutionRequest(player, payload, workerMob, storage);
+                        }
+                    });
+                }
+        );
+        registrar.playToClient(
+                OpenMinerConfigPayload.TYPE,
+                OpenMinerConfigPayload.STREAM_CODEC,
+                (payload, context) -> {
+                    context.enqueueWork(() -> {
+                        if (net.neoforged.fml.loading.FMLEnvironment.dist == Dist.CLIENT) {
+                            ExampleModClient.handleOpenMinerConfig(payload);
+                        }
+                    });
+                }
+        );
+        registrar.playToServer(
+                MinerConfigSubmitPayload.TYPE,
+                MinerConfigSubmitPayload.STREAM_CODEC,
+                (payload, context) -> {
+                    context.enqueueWork(() -> {
+                        if (context.player() instanceof net.minecraft.server.level.ServerPlayer player) {
+                            WorkerOrderSession.handleMinerConfigSubmit(player, payload);
+                        }
+                    });
+                }
+        );
+        registrar.playToClient(
+                MinerConfigResponsePayload.TYPE,
+                MinerConfigResponsePayload.STREAM_CODEC,
+                (payload, context) -> {
+                    context.enqueueWork(() -> {
+                        if (net.neoforged.fml.loading.FMLEnvironment.dist == Dist.CLIENT) {
+                            ExampleModClient.handleMinerConfigResponse(payload);
+                        }
+                    });
+                }
+        );
     }
 
     // You can use SubscribeEvent and let the Event Bus discover methods to call

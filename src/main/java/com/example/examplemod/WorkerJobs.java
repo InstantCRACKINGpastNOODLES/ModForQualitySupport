@@ -11,9 +11,14 @@ import net.minecraft.world.entity.PathfinderMob;
 public final class WorkerJobs {
     public static final ResourceLocation WAIT = ResourceLocation.fromNamespaceAndPath(ExampleMod.MODID, "wait");
     public static final ResourceLocation MOVE = ResourceLocation.fromNamespaceAndPath(ExampleMod.MODID, "move");
+    public static final ResourceLocation MINE = ResourceLocation.fromNamespaceAndPath(ExampleMod.MODID, "mine");
+    public static final ResourceLocation FARM = ResourceLocation.fromNamespaceAndPath(ExampleMod.MODID, "farm");
+
     private static final Map<ResourceLocation, Predicate<Mob>> DEFINITIONS = Map.of(
             WAIT, mob -> mob instanceof PathfinderMob,
-            MOVE, mob -> mob instanceof PathfinderMob);
+            MOVE, mob -> mob instanceof PathfinderMob,
+            MINE, mob -> mob instanceof PathfinderMob,
+            FARM, mob -> mob instanceof PathfinderMob);
 
     private WorkerJobs() {
     }

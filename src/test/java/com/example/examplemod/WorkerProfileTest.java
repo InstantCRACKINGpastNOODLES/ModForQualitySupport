@@ -5,6 +5,7 @@ import java.util.UUID;
 
 import com.google.gson.JsonObject;
 import com.mojang.serialization.JsonOps;
+import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
 import org.junit.jupiter.api.Test;
 
@@ -127,6 +128,72 @@ class WorkerProfileTest {
         assertTrue(running.transition(JobStatus.RUNNING, 21, null).isEmpty());
         assertTrue(running.transition(JobStatus.PAUSED, 21, "unexpected").isEmpty());
         assertEquals(running, reload(running));
+    }
+
+    @Test
+    void behaviorStateFollowDefaultAndTransitionsPreserveJobs() {
+        WorkerProfile profile = new WorkerProfile(ENTITY, OWNER, DIMENSION, WorkerStatus.IDLE);
+        assertEquals(WorkerBehavior.FOLLOW, profile.behavior());
+
+        // Assign a Move job
+        WorkerJob moveJob = new WorkerJob(WorkerJobs.MOVE, JobStatus.ASSIGNED, 0,
+                Optional.empty(), Optional.of(new WorkerTarget(DIMENSION, new BlockPos(10, 64, 10))));
+        WorkerProfile withMove = new WorkerProfile(ENTITY, OWNER, DIMENSION, WorkerStatus.IDLE, Optional.of(moveJob));
+        WorkerProfile running = withMove.transition(JobStatus.RUNNING, 10, null).orElseThrow();
+        assertEquals(JobStatus.RUNNING, running.job().orElseThrow().status());
+
+        // Unauthorized behavior change does not modify state
+        assertTrue(running.setBehavior(UUID.randomUUID(), WorkerBehavior.STAND).isEmpty());
+
+        // Stand pauses running Move job rather than deleting it
+        WorkerProfile standing = running.setBehavior(OWNER, WorkerBehavior.STAND).orElseThrow();
+        assertEquals(WorkerBehavior.STAND, standing.behavior());
+        assertTrue(standing.job().isPresent());
+        assertEquals(JobStatus.PAUSED, standing.job().orElseThrow().status());
+
+        // Follow resumes paused Move job
+        WorkerProfile resumed = standing.setBehavior(OWNER, WorkerBehavior.FOLLOW).orElseThrow();
+        assertEquals(WorkerBehavior.FOLLOW, resumed.behavior());
+        assertTrue(resumed.job().isPresent());
+        assertEquals(JobStatus.RUNNING, resumed.job().orElseThrow().status());
+
+        // Serialization round-trip preserves behavior and home
+        BlockPos homePos = new BlockPos(32, 64, 48);
+        WorkerProfile withHome = resumed.setHome(OWNER, homePos).orElseThrow();
+        assertEquals(Optional.of(new WorkerTarget(DIMENSION, homePos)), withHome.home());
+        WorkerProfile reloaded = reload(withHome);
+        assertEquals(withHome, reloaded);
+        assertEquals(WorkerBehavior.FOLLOW, reloaded.behavior());
+        assertEquals(Optional.of(new WorkerTarget(DIMENSION, homePos)), reloaded.home());
+    }
+
+    @Test
+    void homeAreaEnforcesThreeByThreeChunks() {
+        BlockPos home = new BlockPos(16, 64, 16); // Chunk (1, 1)
+        WorkerProfile profile = new WorkerProfile(ENTITY, OWNER, DIMENSION, WorkerStatus.IDLE).setHome(OWNER, home).orElseThrow();
+
+        // Center chunk (1, 1)
+        assertTrue(profile.isWithinHomeArea(new BlockPos(16, 64, 16)));
+        assertTrue(profile.isWithinHomeArea(new BlockPos(31, 100, 31)));
+
+        // Adjacent chunks (0, 1), (2, 1), (1, 0), (1, 2), (0, 0), (2, 2)
+        assertTrue(profile.isWithinHomeArea(new BlockPos(0, 64, 16)));   // Chunk 0, 1
+        assertTrue(profile.isWithinHomeArea(new BlockPos(32, 64, 16)));  // Chunk 2, 1
+        assertTrue(profile.isWithinHomeArea(new BlockPos(16, 64, 0)));   // Chunk 1, 0
+        assertTrue(profile.isWithinHomeArea(new BlockPos(16, 64, 32)));  // Chunk 1, 2
+        assertFalse(profile.isWithinHomeArea(new BlockPos(-1, 64, -1)));  // Chunk -1, -1 -> delta X is 2 -> outside!
+        assertTrue(profile.isWithinHomeArea(new BlockPos(0, 64, 0)));    // Chunk 0, 0 -> delta X 1, delta Z 1 -> inside!
+        assertTrue(profile.isWithinHomeArea(new BlockPos(47, 64, 47)));  // Chunk 2, 2 -> delta X 1, delta Z 1 -> inside!
+
+        // 2 chunks away in X or Z is strictly outside the 3x3 chunks
+        assertFalse(profile.isWithinHomeArea(new BlockPos(48, 64, 16))); // Chunk 3, 1 -> delta X 2
+        assertFalse(profile.isWithinHomeArea(new BlockPos(-16, 64, 16)));// Chunk -1, 1 -> delta X 2
+        assertFalse(profile.isWithinHomeArea(new BlockPos(16, 64, 48))); // Chunk 1, 3 -> delta Z 2
+        assertFalse(profile.isWithinHomeArea(new BlockPos(16, 64, -16)));// Chunk 1, -1 -> delta Z 2
+
+        // When no home set, isWithinHomeArea is false
+        WorkerProfile noHome = new WorkerProfile(ENTITY, OWNER, DIMENSION, WorkerStatus.IDLE);
+        assertFalse(noHome.isWithinHomeArea(home));
     }
 
     private static BindingTicketItem.Decision decide(boolean server, boolean available, boolean bound,
