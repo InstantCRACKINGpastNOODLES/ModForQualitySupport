@@ -70,6 +70,7 @@ public class WorkerManagementMenu extends AbstractContainerMenu {
     }
 
     private boolean suppressStorageWriteBack = false;
+    private boolean storageInitialized = false;
     private boolean testMode = false;
     private Supplier<WorkerStorage> storageReader;
     private Consumer<WorkerStorage> storageWriter;
@@ -86,8 +87,17 @@ public class WorkerManagementMenu extends AbstractContainerMenu {
         if (inventory != null && inventory.player != null && inventory.player.level().isClientSide()) {
             return;
         }
+        if (!storageInitialized) {
+            return;
+        }
         Mob mob = worker();
         if (mob != null && (testMode || (inventory != null && inventory.player != null && sessionValid(inventory.player, mob))) && candidateCount() == 1) {
+            if (ws != null && ws.items().stream().allMatch(ItemStack::isEmpty) && mob.hasData(ExampleMod.WORKER_STORAGE)) {
+                WorkerStorage existing = mob.getData(ExampleMod.WORKER_STORAGE);
+                if (existing != null && existing.items().stream().anyMatch(s -> !s.isEmpty()) && !storageInitialized) {
+                    return;
+                }
+            }
             mob.setData(ExampleMod.WORKER_STORAGE, ws);
         }
     }
@@ -97,6 +107,12 @@ public class WorkerManagementMenu extends AbstractContainerMenu {
             super.setChanged();
             if (suppressStorageWriteBack) return;
             if (inventory != null && inventory.player != null && inventory.player.level().isClientSide()) return;
+            if (!storageInitialized) {
+                if (syncFromEntityStorageIfChanged()) {
+                    return;
+                }
+                return;
+            }
             if (storageWriter != null) {
                 List<ItemStack> items = new ArrayList<>();
                 for (int i = 0; i < WorkerStorage.SIZE; i++) items.add(getItem(i).copy());
@@ -112,6 +128,7 @@ public class WorkerManagementMenu extends AbstractContainerMenu {
                 ItemStack item = (snapshot != null && i < snapshot.size()) ? snapshot.get(i).copy() : ItemStack.EMPTY;
                 storage.setItem(i, item);
             }
+            storageInitialized = true;
         } finally {
             suppressStorageWriteBack = false;
         }
@@ -641,6 +658,10 @@ public class WorkerManagementMenu extends AbstractContainerMenu {
 
     public boolean isStorageWriteBackSuppressed() {
         return suppressStorageWriteBack;
+    }
+
+    public boolean isStorageInitialized() {
+        return storageInitialized;
     }
 
     void setTestMode(boolean testMode) {

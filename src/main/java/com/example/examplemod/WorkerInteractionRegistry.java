@@ -1,16 +1,166 @@
 package com.example.examplemod;
 
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.Predicate;
 
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Mob;
 
-/** Instance-scoped adapter registry. Call only from trusted server code with server-checked availability. */
+/**
+ * Registry and resolver for worker interactions.
+ * Hosts both legacy request handlers for backward compatibility and Phase 1A interaction executors.
+ */
 public final class WorkerInteractionRegistry {
+
+    // ---------------------------------------------------------
+    // Phase 1A Interaction Core Executor Registry & Resolver
+    // ---------------------------------------------------------
+
+    private final Map<ResourceLocation, InteractionExecutor> executors = new LinkedHashMap<>();
+
+    public void registerExecutor(InteractionExecutor executor) {
+        Objects.requireNonNull(executor, "executor must not be null");
+        Objects.requireNonNull(executor.id(), "executor ID must not be null");
+        if (executors.containsKey(executor.id())) {
+            throw new IllegalArgumentException("Duplicate executor ID: " + executor.id());
+        }
+        executors.put(executor.id(), executor);
+    }
+
+    public boolean unregisterExecutor(ResourceLocation id) {
+        Objects.requireNonNull(id, "id must not be null");
+        return executors.remove(id) != null;
+    }
+
+    public Optional<InteractionExecutor> getExecutor(ResourceLocation id) {
+        Objects.requireNonNull(id, "id must not be null");
+        return Optional.ofNullable(executors.get(id));
+    }
+
+    public List<InteractionExecutor> getAllExecutors() {
+        return List.copyOf(executors.values());
+    }
+
+    public int getExecutorCount() {
+        return executors.size();
+    }
+
+    public void clearExecutors() {
+        executors.clear();
+    }
+
+    public ResolutionResult resolve(InteractionIntent intent) {
+        return resolve(intent, RoutingPolicy.GENERIC_FIRST);
+    }
+
+    public ResolutionResult resolve(InteractionIntent intent, RoutingPolicy policy) {
+        Objects.requireNonNull(intent, "intent must not be null");
+        Objects.requireNonNull(policy, "policy must not be null");
+
+        // 1. Target & Action compatibility check
+        List<InteractionExecutor> handlingExecutors = executors.values().stream()
+                .filter(e -> e.canHandle(intent))
+                .toList();
+
+        if (handlingExecutors.isEmpty()) {
+            return ResolutionResult.noCompatibleExecutor("No registered executor supports the given target and action");
+        }
+
+        // 2. Execution mode support check
+        List<InteractionExecutor> modeMatching = handlingExecutors.stream()
+                .filter(e -> e.supportsMode(intent.executionMode()))
+                .toList();
+
+        if (modeMatching.isEmpty()) {
+            return ResolutionResult.unsupportedMode(intent.executionMode(),
+                    "No compatible executor supports mode: " + intent.executionMode());
+        }
+
+        // 3. Partition by category
+        List<InteractionExecutor> genericList = modeMatching.stream()
+                .filter(e -> e.category() == InteractionExecutor.Category.GENERIC_PLAYER)
+                .toList();
+        List<InteractionExecutor> adapterList = modeMatching.stream()
+                .filter(e -> e.category() == InteractionExecutor.Category.SPECIALIZED_ADAPTER)
+                .toList();
+        List<InteractionExecutor> capabilityList = modeMatching.stream()
+                .filter(e -> e.category() == InteractionExecutor.Category.CAPABILITY_HANDLER)
+                .toList();
+
+        // 4. Apply routing policy
+        List<InteractionExecutor> candidatePool;
+        switch (policy) {
+            case CAPABILITY_ONLY -> {
+                if (capabilityList.isEmpty()) {
+                    return ResolutionResult.rejectedByPolicy("No capability handler matches for CAPABILITY_ONLY policy");
+                }
+                candidatePool = capabilityList;
+            }
+            case GENERIC_STRICT -> {
+                if (genericList.isEmpty()) {
+                    return ResolutionResult.noCompatibleExecutor("No generic player executor available under GENERIC_STRICT policy");
+                }
+                candidatePool = genericList;
+            }
+            case SPECIALIZED_FIRST -> {
+                if (!adapterList.isEmpty()) {
+                    candidatePool = adapterList;
+                } else if (!genericList.isEmpty()) {
+                    candidatePool = genericList;
+                } else {
+                    return ResolutionResult.noCompatibleExecutor("No compatible player executor or specialized adapter found");
+                }
+            }
+            case GENERIC_FIRST -> {
+                if (!genericList.isEmpty()) {
+                    candidatePool = genericList;
+                } else if (!adapterList.isEmpty()) {
+                    candidatePool = adapterList;
+                } else if (intent.target() instanceof InteractionTarget.EndpointTarget && !capabilityList.isEmpty()) {
+                    candidatePool = capabilityList;
+                } else {
+                    return ResolutionResult.noCompatibleExecutor("No compatible player executor or specialized adapter found");
+                }
+            }
+            default -> throw new IllegalArgumentException("Unknown routing policy: " + policy);
+        }
+
+        // 5. Explicit priority evaluation & deterministic tie handling
+        int maxPriority = candidatePool.stream()
+                .mapToInt(InteractionExecutor::priority)
+                .max()
+                .orElse(Integer.MIN_VALUE);
+
+        List<InteractionExecutor> topCandidates = candidatePool.stream()
+                .filter(e -> e.priority() == maxPriority)
+                .toList();
+
+        if (topCandidates.size() == 1) {
+            return ResolutionResult.resolved(topCandidates.get(0));
+        }
+
+        // Priority tie: sort lexicographically by resource location string to guarantee determinism
+        List<ResourceLocation> tiedIds = topCandidates.stream()
+                .map(InteractionExecutor::id)
+                .sorted(Comparator.comparing(ResourceLocation::toString))
+                .toList();
+
+        return ResolutionResult.ambiguousRouting(tiedIds,
+                "Ambiguous resolution between executors with equal priority " + maxPriority + ": " + tiedIds);
+    }
+
+    // ---------------------------------------------------------
+    // Legacy Handler API (Preserved for compatibility)
+    // ---------------------------------------------------------
+
     public interface Handler {
         boolean supports(WorkerInteraction.Request request);
 
